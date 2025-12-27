@@ -45,5 +45,5 @@ build.cmd
 
 ## 致谢
 
-- [Hikari](https://github.com/HikariObfuscator/Hikari) - 原始混淆器项目
-- [OLLVM](https://github.com/obfuscator-llvm/obfuscator) - 混淆技术基础
+- [Hikari](https://github.com/HikariObfuscator/Hikari)
+- [OLLVM](https://github.com/obfuscator-llvm/obfuscator)
