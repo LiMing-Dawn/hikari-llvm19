@@ -1,0 +1,129 @@
+name: Build LLVM with Custom Changes
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:  # 允许手动触发
+
+jobs:
+  build-llvm:
+    runs-on: ubuntu-22.04  # 或 ubuntu-latest
+    strategy:
+      matrix:
+        android-abi: [arm64-v8a, armeabi-v7a, x86_64]
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        submodules: recursive
+    
+    - name: Setup Android NDK
+      uses: android-actions/setup-android@v3
+      with:
+        ndk-version: '25.2.9519653'  # 指定NDK版本
+        
+    - name: Configure environment
+      run: |
+        echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$(ls $ANDROID_HOME/ndk/ | head -1)" >> $GITHUB_ENV
+        echo "PATH=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH" >> $GITHUB_ENV
+        
+    - name: Clone LLVM source
+      run: |
+        git clone --config core.autocrlf=false \
+                  --depth=1 \
+                  --branch llvmorg-19.1.0 \
+                  https://github.com/llvm/llvm-project.git
+        
+    - name: Copy custom LLVM/Clang files
+      run: |
+        cp -rf llvm llvm-project/
+        cp -rf clang llvm-project/
+        
+    - name: Setup build environment
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          cmake \
+          ninja-build \
+          build-essential \
+          python3 \
+          python3-pip \
+          git \
+          zlib1g-dev \
+          libncurses5-dev \
+          libxml2-dev \
+          libedit-dev
+        
+    - name: Configure build
+      run: |
+        cd llvm-project
+        mkdir -p build && cd build
+        
+        # 根据不同的Android ABI设置目标
+        case "${{ matrix.android-abi }}" in
+          "arm64-v8a")
+            TARGET=aarch64-linux-android
+            API=21
+            ;;
+          "armeabi-v7a")
+            TARGET=armv7a-linux-androideabi
+            API=21
+            ;;
+          "x86_64")
+            TARGET=x86_64-linux-android
+            API=21
+            ;;
+        esac
+        
+        # CMake配置
+        cmake ../llvm \
+          -G Ninja \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DLLVM_ENABLE_PROJECTS="clang;lld" \
+          -DCMAKE_SYSTEM_NAME=Android \
+          -DCMAKE_ANDROID_NDK=$ANDROID_NDK_HOME \
+          -DCMAKE_SYSROOT=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot \
+          -DCMAKE_ANDROID_ARCH_ABI=${{ matrix.android-abi }} \
+          -DCMAKE_ANDROID_STL_TYPE=c++_static \
+          -DCMAKE_C_COMPILER=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/${TARGET}${API}-clang \
+          -DCMAKE_CXX_COMPILER=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/${TARGET}${API}-clang++ \
+          -DCMAKE_C_FLAGS="-target ${TARGET}${API} -isystem $ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include" \
+          -DCMAKE_CXX_FLAGS="-target ${TARGET}${API} -isystem $ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/c++/v1" \
+          -DLLVM_TARGET_ARCH=${TARGET%%-*} \
+          -DLLVM_DEFAULT_TARGET_TRIPLE=${TARGET} \
+          -DLLVM_TARGETS_TO_BUILD="AArch64;ARM;X86" \
+          -DLLVM_INCLUDE_TESTS=OFF \
+          -DLLVM_INCLUDE_EXAMPLES=OFF \
+          -DLLVM_ENABLE_TERMINFO=OFF \
+          -DLLVM_ENABLE_ZLIB=ON \
+          -DLLVM_ENABLE_THREADS=ON
+        
+    - name: Build LLVM
+      run: |
+        cd llvm-project/build
+        ninja -j$(nproc) all
+        
+    - name: Archive build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: llvm-build-${{ matrix.android-abi }}
+        path: |
+          llvm-project/build/bin/
+          llvm-project/build/lib/
+        retention-days: 7
+        
+    - name: Create compressed package
+      run: |
+        cd llvm-project/build
+        tar -czf llvm-android-${{ matrix.android-abi }}.tar.gz bin/ lib/
+        
+    - name: Upload package
+      uses: actions/upload-artifact@v4
+      with:
+        name: llvm-package-${{ matrix.android-abi }}
+        path: llvm-project/build/llvm-android-${{ matrix.android-abi }}.tar.gz
+        retention-days: 30
